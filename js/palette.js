@@ -3,7 +3,9 @@ window.Arukone = window.Arukone || {};
 window.Arukone.Palette = [
   '#e6194b', '#3cb44b', '#4363d8', '#f58231',
   '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
-  '#469990', '#9a6324', '#800000', '#808000'
+  '#469990', '#9a6324', '#800000', '#808000',
+  '#000075', '#ffe119', '#a9a9a9', '#fabed4',
+  '#aaffc3', '#ffd8b1', '#dcbeff', '#fffac8'
 ];
 
 window.Arukone.colorForPair = function colorForPair(pairId) {
