@@ -1,0 +1,62 @@
+(function () {
+  'use strict';
+
+  var Arukone = window.Arukone;
+  var ALLOWED_SIZES = [5, 6, 7, 8, 9, 10];
+  var DEFAULT_SIZE = 7;
+
+  var container = document.getElementById('grid');
+  var sizeSelect = document.getElementById('size-select');
+  var newGameBtn = document.getElementById('new-game-btn');
+  var resetBtn = document.getElementById('reset-btn');
+  var winBanner = document.getElementById('win-banner');
+
+  var stateHolder = { grid: null };
+  var cellElements = [];
+
+  function redraw() {
+    Arukone.Renderer.render(cellElements, stateHolder.grid);
+  }
+
+  function showWin() {
+    winBanner.hidden = false;
+  }
+
+  function hideWin() {
+    winBanner.hidden = true;
+  }
+
+  function startNewGame(size) {
+    var puzzle = Arukone.PuzzleGenerator.generate(size);
+    stateHolder.grid = Arukone.GridModel.createGrid(puzzle.size, puzzle.pairs);
+    cellElements = Arukone.Renderer.buildBoard(container, size);
+    hideWin();
+    redraw();
+  }
+
+  sizeSelect.addEventListener('change', function () {
+    var size = parseInt(sizeSelect.value, 10);
+    Arukone.Storage.saveSize(size);
+    startNewGame(size);
+  });
+
+  newGameBtn.addEventListener('click', function () {
+    startNewGame(parseInt(sizeSelect.value, 10));
+  });
+
+  resetBtn.addEventListener('click', function () {
+    Arukone.GridModel.resetAllPaths(stateHolder.grid);
+    hideWin();
+    redraw();
+  });
+
+  Arukone.InputController.attach(container, stateHolder, {
+    onUpdate: redraw,
+    onWin: showWin
+  });
+
+  var storedSize = Arukone.Storage.loadSize(DEFAULT_SIZE);
+  var initialSize = ALLOWED_SIZES.indexOf(storedSize) !== -1 ? storedSize : DEFAULT_SIZE;
+  sizeSelect.value = String(initialSize);
+  startNewGame(initialSize);
+})();

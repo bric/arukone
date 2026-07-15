@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arukone</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="toolbar">
+  <h1>Arukone</h1>
+  <label for="size-select">Feldgröße</label>
+  <select id="size-select">
+    <option value="5">5 × 5</option>
+    <option value="6">6 × 6</option>
+    <option value="7" selected>7 × 7</option>
+    <option value="8">8 × 8</option>
+    <option value="9">9 × 9</option>
+    <option value="10">10 × 10</option>
+  </select>
+  <button id="new-game-btn" type="button">Neues Spiel</button>
+  <button id="reset-btn" type="button">Zurücksetzen</button>
+</header>
+
+<main class="board-area">
+  <div id="grid" class="grid"></div>
+  <div id="win-banner" class="win-banner" hidden>Gelöst!</div>
+</main>
+
+<script src="js/palette.js"></script>
+<script src="js/grid-model.js"></script>
+<script src="js/puzzle-generator.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/input-controller.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
