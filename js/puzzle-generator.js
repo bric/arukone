@@ -308,25 +308,245 @@ window.Arukone = window.Arukone || {};
     return Math.max(3, Math.round(size * 0.6));
   }
 
-  // Bei wenigen Paaren ist ein vollständiger Beweis der Abkürzungsfreiheit
-  // nicht mehr bezahlbar (der Suchraum explodiert). Stattdessen jagen mehrere
-  // randomisierte Suchläufe gezielt nach Abkürzungen: Wird eine gefunden, ist
-  // der Kandidat verworfen; überlebt er alle Läufe (oder wird die Suche sogar
-  // erschöpft), gilt er als gut. Greedy- und Anti-Läufe wechseln sich ab, da
-  // sie unterschiedliche Abkürzungsformen aufspüren.
-  var HUNT_PLAN = ['greedy', 'anti', 'greedy', 'anti', 'greedy', 'anti'];
-  var HUNT_BUDGET = 2500000;
-  var OPTIMIZE_SLICE_MS = 200;
-  var ESCALATE_AFTER_MS = 30000;
+  // Frontier-DP: entscheidet EXAKT, ob eine Verbindung aller Paare existiert,
+  // die mindestens ein Feld frei lässt ('shortcut'), oder ob jede Lösung das
+  // Gitter füllt ('clean'). 'toocomplex', falls die Zustandsmenge das Limit
+  // sprengt; 'nosolution', falls das Rätsel gar nicht lösbar ist.
+  //
+  // Zellen werden zeilenweise abgearbeitet; beim Besuch von Zelle v=(r,c)
+  // werden ihre Kanten nach links und oben entschieden. Der obere Nachbar ist
+  // danach vollständig bestimmt und wird finalisiert (Grad 0 = unbenutzt,
+  // Grad 2 = Durchgang, Terminals brauchen Grad 1).
+  //
+  // Frontier-Slot-Zustände:
+  //   DOT (0)  Zelle bisher Grad 0
+  //   XX  (1)  Zelle Grad 2 (lokal abgeschlossen)
+  //   NN  (2)  Zelle existiert nicht (virtuelle Zeile -1)
+  //   LBL+i    offenes Pfadende, anderes Ende ist Terminal von Paar i
+  //   MATE+j   offenes Pfadende, anderes Ende liegt in Frontier-Slot j
+  // plus 1 Bit hasEmpty (eine unbenutzte Zelle ist bereits festgelegt).
+  // Ein Zustand wird als Zahl zur Basis (3 + Paarzahl + Slotzahl) kodiert
+  // und muss in ein Double passen. step() verarbeitet eine Zelle pro Aufruf,
+  // damit der Browser zwischendurch rendern kann.
+  var DOT = 0, XX = 1, NN = 2, LBL = 3;
 
-  // Resumierbare Suche: step() arbeitet ein Zeitscheibchen ab und gibt danach
-  // die Kontrolle zurück, damit der Browser zwischendurch rendern kann.
-  // Ergebnis über result() abfragen, sobald done() true liefert.
+  function createShortcutCheck(size, pairs, stateCap) {
+    var n = size;
+    var MATE = LBL + pairs.length;
+    var BASE = MATE + n;
+    var verdict = null;
+    if (2 * Math.pow(BASE, n) >= 9007199254740992) verdict = 'toocomplex';
+
+    var term = new Int8Array(n * n);
+    for (var p = 0; p < pairs.length; p++) {
+      term[pairs[p].endpointA.row * n + pairs[p].endpointA.col] = p + 1;
+      term[pairs[p].endpointB.row * n + pairs[p].endpointB.col] = p + 1;
+    }
+
+    var pow = [1];
+    for (var i = 1; i <= n; i++) pow[i] = pow[i - 1] * BASE;
+    var HE = pow[n];
+
+    function encode(slots, he) {
+      var v = he ? HE : 0;
+      for (var j = 0; j < n; j++) v += slots[j] * pow[j];
+      return v;
+    }
+    function decode(v, slots) {
+      var he = 0;
+      if (v >= HE) { he = 1; v -= HE; }
+      for (var j = 0; j < n; j++) {
+        slots[j] = v % BASE;
+        v = (v - slots[j]) / BASE;
+      }
+      return he;
+    }
+
+    // Finalisiert Slot j (Zelle verlässt die Frontier ohne weitere Kanten).
+    // Rückgabe: -1 invalid, sonst 0/1 = neue unbenutzte Zelle.
+    function finalizeSlot(slots, j, label) {
+      var s = slots[j];
+      if (s === NN) return 0;
+      if (label) {
+        if (s >= MATE) { slots[s - MATE] = LBL + (label - 1); return 0; }
+        if (s >= LBL) return (s - LBL === label - 1) ? 0 : -1;
+        return -1; // Terminal braucht Grad 1
+      }
+      if (s === DOT) return 1;
+      if (s === XX) return 0;
+      return -1; // offenes Ende darf nicht enden
+    }
+
+    var states = new Set();
+    states.add(encode(new Array(n).fill(NN), 0));
+    var slots = new Array(n);
+    var work = new Array(n);
+    var r = 0, c = 0;
+
+    function processCell() {
+      var vLabel = term[r * n + c];
+      var uLabel = r > 0 ? term[(r - 1) * n + c] : 0;
+      var lLabel = c > 0 ? term[r * n + c - 1] : 0;
+      var next = new Set();
+      var iter = states.values();
+      for (var e = iter.next(); !e.done; e = iter.next()) {
+        var he = decode(e.value, slots);
+        var l = c > 0 ? slots[c - 1] : NN;
+        var u = slots[c];
+
+        for (var S = 0; S < 4; S++) {
+          var useL = (S & 1) !== 0;
+          var useU = (S & 2) !== 0;
+          if (useL && (c === 0 || l === XX || l === NN)) continue;
+          if (useU && (u === XX || u === NN)) continue;
+          if (vLabel && useL && useU) continue; // Terminal hat Grad <= 1
+          // Terminal links mit Grad 1 darf keine zweite Kante bekommen
+          if (useL && lLabel && l !== DOT) continue;
+
+          for (var j = 0; j < n; j++) work[j] = slots[j];
+          var vState = DOT;
+          var ok = true;
+
+          if (useL) {
+            if (l === DOT) {
+              work[c - 1] = MATE + c;
+              vState = MATE + (c - 1);
+            } else if (l >= MATE) {
+              var lp = l - MATE;
+              work[c - 1] = XX;
+              if (lp === c) {
+                // l-Fragment endete in l und u: Ende wandert von l zu v
+                vState = MATE + c;
+              } else {
+                work[lp] = MATE + c;
+                vState = MATE + lp;
+              }
+            } else {
+              work[c - 1] = XX;
+              vState = l;
+            }
+          }
+
+          if (useU) {
+            // u bekommt die Kante zu v und wird damit finalisiert
+            var uDegAfter = (u === DOT) ? 1 : 2;
+            if (uLabel && uDegAfter !== 1) continue;
+            if (!uLabel && uDegAfter === 1) continue;
+            // Wohin zeigt das andere Ende des u-Fragments?
+            var vEnd = (u === DOT) ? LBL + (uLabel - 1) : u;
+
+            if (!useL) {
+              // v ist neues offenes Ende des u-Fragments
+              if (vEnd >= MATE) {
+                work[vEnd - MATE] = MATE + c;
+                vState = MATE + (vEnd - MATE);
+              } else {
+                vState = vEnd;
+              }
+            } else {
+              // v hat beide Kanten: Fragmente von l und u verschmelzen
+              var lEnd = vState;
+              vState = XX;
+              if (lEnd >= MATE && lEnd - MATE === c) {
+                ok = false; // l- und u-Ende gehören zum selben Fragment: Zyklus
+              } else if (lEnd >= MATE) {
+                var lq = lEnd - MATE;
+                if (vEnd >= MATE) {
+                  var uq = vEnd - MATE;
+                  if (uq === lq) ok = false; // Zyklus
+                  else {
+                    work[lq] = MATE + uq;
+                    work[uq] = MATE + lq;
+                  }
+                } else {
+                  work[lq] = vEnd; // Label wandert ans andere Ende
+                }
+              } else {
+                if (vEnd >= MATE) work[vEnd - MATE] = lEnd;
+                else if (lEnd !== vEnd) ok = false; // Paar-Labels müssen passen
+              }
+            }
+            if (ok) {
+              work[c] = vState;
+              next.add(encode(work, he));
+            }
+            continue;
+          }
+
+          // keine U-Kante: u regulär finalisieren
+          if (vState >= MATE && vState - MATE === c) {
+            // l-Fragment endete in u; u muss jetzt als Terminal retiren,
+            // das Fragmentende wird zum Label an v
+            if (!uLabel || u < LBL) continue;
+            work[c] = LBL + (uLabel - 1);
+            next.add(encode(work, he));
+            continue;
+          }
+
+          var add = finalizeSlot(work, c, uLabel);
+          if (add < 0) continue;
+          work[c] = vState;
+          next.add(encode(work, (he || add) ? 1 : 0));
+        }
+      }
+      states = next;
+      if (states.size === 0) { verdict = 'nosolution'; return; }
+      if (states.size > stateCap) { verdict = 'toocomplex'; return; }
+      c++;
+      if (c === n) { c = 0; r++; }
+      if (r === n) finish();
+    }
+
+    function finish() {
+      var found = false;
+      var anyValid = false;
+      var iter = states.values();
+      for (var e = iter.next(); !e.done && !found; e = iter.next()) {
+        var he = decode(e.value, slots);
+        var valid = true;
+        for (var j = 0; j < n && valid; j++) {
+          var add = finalizeSlot(slots, j, term[(n - 1) * n + j]);
+          if (add < 0) valid = false;
+          else if (add > 0) he = 1;
+        }
+        if (valid) anyValid = true;
+        if (valid && he) found = true;
+      }
+      verdict = found ? 'shortcut' : (anyValid ? 'clean' : 'nosolution');
+    }
+
+    return {
+      step: function () { if (!verdict) processCell(); },
+      done: function () { return verdict !== null; },
+      verdict: function () { return verdict; }
+    };
+  }
+
+  function hasShortcutSolution(size, pairs, stateCap) {
+    var check = createShortcutCheck(size, pairs, stateCap);
+    while (!check.done()) check.step();
+    return check.verdict();
+  }
+
+  // Erzeugungsstrategie: Kandidaten mit wenigen Paaren bauen, dann beweisen,
+  // dass jede Lösung das Gitter füllt. Zwei schnelle DFS-Jagden (zielnah und
+  // zielfern) sortieren offensichtliche Abkürzungs-Kandidaten billig aus,
+  // die Frontier-DP liefert anschließend den exakten Beweis. Nur bewiesen
+  // saubere Rätsel werden akzeptiert.
+  var HUNT_PLAN = ['greedy', 'anti'];
+  var HUNT_BUDGET = 1500000;
+  var OPTIMIZE_SLICE_MS = 200;
+  var ESCALATE_AFTER_MS = 45000;
+  var STATE_CAP = 400000;
+
+  // Resumierbare Suche: step() arbeitet ein Häppchen ab und gibt die
+  // Kontrolle zurück, damit der Browser zwischendurch rendern kann.
   function createSearch(size) {
     var baseTarget = defaultPairCount(size);
     var startTime = Date.now();
     var candidate = null;
     var huntIndex = 0;
+    var exact = null;
     var result = null;
 
     function currentTarget() {
@@ -346,15 +566,35 @@ window.Arukone = window.Arukone || {};
         if (segments.length < 2 || !longEnough) return;
         candidate = segmentsToPairs(segments);
         huntIndex = 0;
+        exact = null;
         return;
       }
 
-      var verdict = verifyOnlyFullSolutions(
-        size, shuffle(candidate.slice()), HUNT_BUDGET, HUNT_PLAN[huntIndex]);
-      if (verdict === 'shortcut') {
-        candidate = null;
-      } else if (verdict === 'clean' || ++huntIndex >= HUNT_PLAN.length) {
-        result = { size: size, pairs: candidate };
+      if (huntIndex < HUNT_PLAN.length) {
+        var verdict = verifyOnlyFullSolutions(
+          size, shuffle(candidate.slice()), HUNT_BUDGET, HUNT_PLAN[huntIndex]);
+        if (verdict === 'shortcut') {
+          candidate = null;
+        } else if (verdict === 'clean') {
+          result = { size: size, pairs: candidate };
+        } else {
+          huntIndex++;
+        }
+        return;
+      }
+
+      if (!exact) {
+        exact = createShortcutCheck(size, candidate, STATE_CAP);
+        return;
+      }
+      exact.step();
+      if (exact.done()) {
+        if (exact.verdict() === 'clean') {
+          result = { size: size, pairs: candidate };
+        } else {
+          candidate = null;
+        }
+        exact = null;
       }
     }
 
@@ -390,6 +630,7 @@ window.Arukone = window.Arukone || {};
     defaultPairCount: defaultPairCount,
     generateHamiltonianPath: generateHamiltonianPath,
     verifyOnlyFullSolutions: verifyOnlyFullSolutions,
+    hasShortcutSolution: hasShortcutSolution,
     cutPathForced: cutPathForced,
     optimizePath: optimizePath
   };
