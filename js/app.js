@@ -10,9 +10,11 @@
   var newGameBtn = document.getElementById('new-game-btn');
   var resetBtn = document.getElementById('reset-btn');
   var winBanner = document.getElementById('win-banner');
+  var generatingHint = document.getElementById('generating-hint');
 
   var stateHolder = { grid: null };
   var cellElements = [];
+  var generationToken = 0;
 
   function redraw() {
     Arukone.Renderer.render(cellElements, stateHolder.grid);
@@ -26,12 +28,26 @@
     winBanner.hidden = true;
   }
 
+  function setControlsEnabled(enabled) {
+    sizeSelect.disabled = !enabled;
+    newGameBtn.disabled = !enabled;
+    resetBtn.disabled = !enabled;
+  }
+
   function startNewGame(size) {
-    var puzzle = Arukone.PuzzleGenerator.generate(size);
-    stateHolder.grid = Arukone.GridModel.createGrid(puzzle.size, puzzle.pairs);
-    cellElements = Arukone.Renderer.buildBoard(container, size);
     hideWin();
-    redraw();
+    setControlsEnabled(false);
+    generatingHint.hidden = false;
+
+    var token = ++generationToken;
+    Arukone.PuzzleGenerator.generateAsync(size, function (puzzle) {
+      if (token !== generationToken) return;
+      stateHolder.grid = Arukone.GridModel.createGrid(puzzle.size, puzzle.pairs);
+      cellElements = Arukone.Renderer.buildBoard(container, size);
+      redraw();
+      generatingHint.hidden = true;
+      setControlsEnabled(true);
+    });
   }
 
   sizeSelect.addEventListener('change', function () {

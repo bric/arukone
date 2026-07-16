@@ -108,6 +108,63 @@ window.Arukone = window.Arukone || {};
     return segments;
   }
 
+  // Backbite-Zug: Ein Pfadende springt zu einem Gitternachbarn, der bereits im
+  // Pfad liegt; das Teilstück dazwischen wird umgedreht. Erhält die
+  // Hamiltoneigenschaft und durchmischt die Pfadform.
+  function backbite(size, path) {
+    var fromHead = Math.random() < 0.5;
+    if (!fromHead) path.reverse();
+    var endpoint = path[0];
+    var ns = neighborsOf(size, endpoint.row, endpoint.col);
+    var pick = ns[Math.floor(Math.random() * ns.length)];
+    var idx = -1;
+    for (var i = 0; i < path.length; i++) {
+      if (path[i].row === pick.row && path[i].col === pick.col) {
+        idx = i;
+        break;
+      }
+    }
+    var result = null;
+    if (idx > 1) {
+      result = path.slice(0, idx).reverse().concat(path.slice(idx));
+    }
+    if (!fromHead) {
+      path.reverse();
+      if (result) result.reverse();
+    }
+    return result;
+  }
+
+  // Zufällige Hamiltonpfade sind kleinteilig gewunden und zerfallen in viele
+  // straffe Segmente. Ein Hügelsteigen über Backbite-Züge formt den Pfad in
+  // große Strukturen um, bis er in höchstens `target` Segmente zerfällt.
+  function optimizePath(size, target, deadline) {
+    var best = null;
+    while (Date.now() < deadline) {
+      var path = generateHamiltonianPath(size);
+      var score = cutPathForced(size, path).length;
+      var sinceImprove = 0;
+      while (sinceImprove < 2000 && score > target && Date.now() < deadline) {
+        var copy = path.map(function (c) { return { row: c.row, col: c.col }; });
+        var moved = backbite(size, copy);
+        if (!moved) {
+          sinceImprove++;
+          continue;
+        }
+        var s = cutPathForced(size, moved).length;
+        if (s <= score) {
+          if (s < score) sinceImprove = 0; else sinceImprove++;
+          score = s;
+          path = moved;
+        } else {
+          sinceImprove++;
+        }
+      }
+      if (!best || score < best.score) best = { score: score, path: path };
+      if (best.score <= target) return best;
+    }
+    return best;
+  }
 
   // Prüft, ob es eine Verbindung aller Paare gibt, die NICHT alle Felder füllt.
   // Rückgabe: 'clean' (jede Lösung füllt das Gitter), 'shortcut' (Abkürzung
@@ -244,33 +301,91 @@ window.Arukone = window.Arukone || {};
     });
   }
 
-  function generate(size) {
-    var maxAttempts = 300;
-    var maxPairs = Math.min(Math.round(size * size / 5), window.Arukone.Palette.length);
-    var verifyBudget = 2000000;
+  function defaultPairCount(size) {
+    return Math.max(3, Math.round(size * 0.6));
+  }
 
-    for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      var path = generateHamiltonianPath(size);
-      var segments = cutPathForced(size, path);
-      if (segments.length < 2 || segments.length > maxPairs) continue;
-      // Keine trivialen Paare: ein Segment der Länge 2 hätte zwei direkt
-      // benachbarte Endpunkte. (Längere straffe Segmente können keine
-      // benachbarten Endpunkte haben, da sie sich sonst selbst berührten.)
-      var allLongEnough = segments.every(function (s) { return s.length >= 3; });
-      if (!allLongEnough) continue;
-      var pairs = segmentsToPairs(segments);
-      if (verifyOnlyFullSolutions(size, pairs, verifyBudget) === 'clean') {
-        return { size: size, pairs: pairs };
+  // Bei wenigen Paaren ist ein vollständiger Beweis der Abkürzungsfreiheit
+  // nicht mehr bezahlbar (der Suchraum explodiert). Stattdessen jagen mehrere
+  // randomisierte Suchläufe gezielt nach Abkürzungen: Wird eine gefunden, ist
+  // der Kandidat verworfen; überlebt er alle Läufe (oder wird die Suche sogar
+  // erschöpft), gilt er als gut.
+  var HUNTS = 4;
+  var HUNT_BUDGET = 3000000;
+  var OPTIMIZE_SLICE_MS = 200;
+  var ESCALATE_AFTER_MS = 15000;
+
+  // Resumierbare Suche: step() arbeitet ein Zeitscheibchen ab und gibt danach
+  // die Kontrolle zurück, damit der Browser zwischendurch rendern kann.
+  // Ergebnis über result() abfragen, sobald done() true liefert.
+  function createSearch(size) {
+    var baseTarget = defaultPairCount(size);
+    var startTime = Date.now();
+    var candidate = null;
+    var huntIndex = 0;
+    var result = null;
+
+    function currentTarget() {
+      var escalation = Math.floor((Date.now() - startTime) / ESCALATE_AFTER_MS);
+      return baseTarget + escalation;
+    }
+
+    function step() {
+      if (result) return;
+
+      if (!candidate) {
+        var target = currentTarget();
+        var opt = optimizePath(size, target, Date.now() + OPTIMIZE_SLICE_MS);
+        if (!opt || opt.score > target) return;
+        var segments = cutPathForced(size, opt.path);
+        var longEnough = segments.every(function (s) { return s.length >= 3; });
+        if (segments.length < 2 || !longEnough) return;
+        candidate = segmentsToPairs(segments);
+        huntIndex = 0;
+        return;
+      }
+
+      var verdict = verifyOnlyFullSolutions(size, shuffle(candidate.slice()), HUNT_BUDGET);
+      if (verdict === 'shortcut') {
+        candidate = null;
+      } else if (verdict === 'clean' || ++huntIndex >= HUNTS) {
+        result = { size: size, pairs: candidate };
       }
     }
 
-    throw new Error('Konnte kein abkürzungsfreies Rätsel erzeugen (Gittergröße ' + size + ')');
+    return {
+      step: step,
+      done: function () { return result !== null; },
+      result: function () { return result; }
+    };
+  }
+
+  function generate(size) {
+    var search = createSearch(size);
+    while (!search.done()) search.step();
+    return search.result();
+  }
+
+  function generateAsync(size, onDone) {
+    var search = createSearch(size);
+    function tick() {
+      search.step();
+      if (search.done()) {
+        onDone(search.result());
+      } else {
+        window.setTimeout(tick, 0);
+      }
+    }
+    window.setTimeout(tick, 0);
   }
 
   window.Arukone.PuzzleGenerator = {
     generate: generate,
+    generateAsync: generateAsync,
+    defaultPairCount: defaultPairCount,
     generateHamiltonianPath: generateHamiltonianPath,
     verifyOnlyFullSolutions: verifyOnlyFullSolutions,
-    cutPathForced: cutPathForced
+    cutPathForced: cutPathForced,
+    optimizePath: optimizePath
   };
 })();
