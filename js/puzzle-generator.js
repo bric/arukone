@@ -135,14 +135,56 @@ window.Arukone = window.Arukone || {};
     return result;
   }
 
+  // Kennzahlen der Lösungsform. Bei Voll-Lösungen sind immer alle Randzellen
+  // belegt — entscheidend ist, ob Segmente LÄNGS der Wand laufen (lange
+  // Wandkanten = Zwiebelringe, sofort erkennbar) oder sie nur kreuzen, und
+  // wie oft sie abknicken (verwinkelt = schwer zu lesen).
+  function shapeStats(size, segments) {
+    var turns = 0, wallEdges = 0, cells = 0, minLen = Infinity;
+    function onWall(a, b) {
+      return (a.row === 0 && b.row === 0) || (a.row === size - 1 && b.row === size - 1) ||
+        (a.col === 0 && b.col === 0) || (a.col === size - 1 && b.col === size - 1);
+    }
+    for (var s = 0; s < segments.length; s++) {
+      var seg = segments[s];
+      if (seg.length < minLen) minLen = seg.length;
+      cells += seg.length;
+      for (var i = 1; i < seg.length; i++) {
+        if (onWall(seg[i - 1], seg[i])) wallEdges++;
+        if (i < seg.length - 1) {
+          var sameDir = (seg[i].row - seg[i - 1].row) === (seg[i + 1].row - seg[i].row) &&
+            (seg[i].col - seg[i - 1].col) === (seg[i + 1].col - seg[i].col);
+          if (!sameDir) turns++;
+        }
+      }
+    }
+    return { turns: turns, wallEdges: wallEdges, cells: cells, minLen: minLen };
+  }
+
+  function shapeCost(size, segments) {
+    var st = shapeStats(size, segments);
+    var cost = 3 * st.wallEdges - 2 * st.turns;
+    if (st.minLen < 3) cost += 100000; // triviale Paare vermeiden
+    return cost;
+  }
+
+  function difficultyScore(size, segments) {
+    var st = shapeStats(size, segments);
+    return (st.turns - st.wallEdges) / st.cells;
+  }
+
   // Zufällige Hamiltonpfade sind kleinteilig gewunden und zerfallen in viele
   // straffe Segmente. Ein Hügelsteigen über Backbite-Züge formt den Pfad in
   // große Strukturen um, bis er in höchstens `target` Segmente zerfällt.
+  // Bei gleicher Segmentzahl entscheidet die Lösungsform (shapeCost) —
+  // sonst landet die Suche fast immer bei leicht erratbaren Zwiebelringen.
   function optimizePath(size, target, deadline) {
     var best = null;
     while (Date.now() < deadline) {
       var path = generateHamiltonianPath(size);
-      var score = cutPathForced(size, path).length;
+      var segs = cutPathForced(size, path);
+      var score = segs.length;
+      var cost = shapeCost(size, segs);
       var sinceImprove = 0;
       while (sinceImprove < 2000 && score > target && Date.now() < deadline) {
         var copy = path.map(function (c) { return { row: c.row, col: c.col }; });
@@ -151,10 +193,12 @@ window.Arukone = window.Arukone || {};
           sinceImprove++;
           continue;
         }
-        var s = cutPathForced(size, moved).length;
-        if (s <= score) {
+        var movedSegs = cutPathForced(size, moved);
+        var s = movedSegs.length;
+        if (s < score || (s === score && shapeCost(size, movedSegs) <= cost)) {
           if (s < score) sinceImprove = 0; else sinceImprove++;
           score = s;
+          cost = shapeCost(size, movedSegs);
           path = moved;
         } else {
           sinceImprove++;
@@ -164,6 +208,82 @@ window.Arukone = window.Arukone || {};
       if (best.score <= target) return best;
     }
     return best;
+  }
+
+  // Mutation auf Partitionsebene: Der Segmentschnitt eines Hamiltonpfads
+  // liefert fast immer Zwiebelringe. Endzellen-Transfers zwischen benachbart
+  // endenden Pfaden erhalten Gültigkeit (Abdeckung, Straffheit, Mindestlänge,
+  // Segmentzahl), können die Lösung aber aus der Ringform herauswandern
+  // lassen. Simulated-Annealing-artig: Form-Verbesserungen immer, kleine
+  // Rückschritte selten annehmen.
+  function mutatePartition(size, segments, moves) {
+    var paths = segments.map(function (p) {
+      return p.map(function (c) { return { row: c.row, col: c.col }; });
+    });
+    var owner = new Int8Array(size * size).fill(-1);
+    for (var i = 0; i < paths.length; i++) {
+      for (var j = 0; j < paths[i].length; j++) {
+        owner[flat(size, paths[i][j])] = i;
+      }
+    }
+
+    function eq(a, b) { return a.row === b.row && a.col === b.col; }
+
+    function shapeJ() {
+      var st = shapeStats(size, paths);
+      return 2 * st.turns - 3 * st.wallEdges;
+    }
+
+    // Endzelle x von Pfad A an ein straff andockendes Ende von Pfad B geben
+    function tryMove() {
+      var ai = Math.floor(Math.random() * paths.length);
+      var A = paths[ai];
+      if (A.length <= 3) return null;
+      var fromHead = Math.random() < 0.5;
+      var x = fromHead ? A[0] : A[A.length - 1];
+      var ns = neighborsOf(size, x.row, x.col);
+      var options = [];
+      for (var i = 0; i < ns.length; i++) {
+        var bi = owner[flat(size, ns[i])];
+        if (bi === -1 || bi === ai) continue;
+        var B = paths[bi];
+        if (eq(B[0], ns[i])) options.push({ bi: bi, head: true });
+        if (eq(B[B.length - 1], ns[i])) options.push({ bi: bi, head: false });
+      }
+      if (options.length === 0) return null;
+      var o = options[Math.floor(Math.random() * options.length)];
+      var yEnd = o.head ? paths[o.bi][0] : paths[o.bi][paths[o.bi].length - 1];
+      for (var n = 0; n < ns.length; n++) {
+        if (owner[flat(size, ns[n])] === o.bi && !eq(ns[n], yEnd)) return null;
+      }
+      return { ai: ai, fromHead: fromHead, x: x, bi: o.bi, toHead: o.head };
+    }
+
+    function apply(t) {
+      if (t.fromHead) paths[t.ai].shift(); else paths[t.ai].pop();
+      if (t.toHead) paths[t.bi].unshift(t.x); else paths[t.bi].push(t.x);
+      owner[flat(size, t.x)] = t.bi;
+    }
+
+    function undo(t) {
+      if (t.toHead) paths[t.bi].shift(); else paths[t.bi].pop();
+      if (t.fromHead) paths[t.ai].unshift(t.x); else paths[t.ai].push(t.x);
+      owner[flat(size, t.x)] = t.ai;
+    }
+
+    var J = shapeJ();
+    for (var m = 0; m < moves; m++) {
+      var t = tryMove();
+      if (!t) continue;
+      apply(t);
+      var J2 = shapeJ();
+      if (J2 >= J || Math.random() < 0.03) {
+        J = J2;
+      } else {
+        undo(t);
+      }
+    }
+    return paths;
   }
 
   // Prüft, ob es eine Verbindung aller Paare gibt, die NICHT alle Felder füllt.
@@ -538,15 +658,25 @@ window.Arukone = window.Arukone || {};
   var OPTIMIZE_SLICE_MS = 200;
   var ESCALATE_AFTER_MS = 45000;
   var STATE_CAP = 400000;
+  var MUTATE_MOVES = 5000;
+  var BESTOF_COUNT = 3;
+  var BESTOF_EXTRA_MS = 8000;
 
   // Resumierbare Suche: step() arbeitet ein Häppchen ab und gibt die
   // Kontrolle zurück, damit der Browser zwischendurch rendern kann.
+  // Bewiesen saubere Kandidaten werden gesammelt (Best-of-N nach
+  // Schwierigkeits-Score), damit nicht das erstbeste, womöglich langweilige
+  // Rätsel gewinnt.
   function createSearch(size) {
     var baseTarget = defaultPairCount(size);
     var startTime = Date.now();
     var candidate = null;
+    var candidateSegments = null;
     var huntIndex = 0;
     var exact = null;
+    var best = null;
+    var cleanCount = 0;
+    var firstCleanAt = 0;
     var result = null;
 
     function currentTarget() {
@@ -554,8 +684,25 @@ window.Arukone = window.Arukone || {};
       return baseTarget + escalation;
     }
 
+    function acceptClean() {
+      var score = difficultyScore(size, candidateSegments);
+      if (!best || score > best.score) {
+        best = { pairs: candidate, score: score };
+      }
+      cleanCount++;
+      if (!firstCleanAt) firstCleanAt = Date.now();
+      candidate = null;
+    }
+
     function step() {
       if (result) return;
+
+      // Best-of-Fenster: genug Kandidaten oder genug Zusatzzeit -> fertig
+      if (best && (cleanCount >= BESTOF_COUNT ||
+        Date.now() - firstCleanAt >= BESTOF_EXTRA_MS)) {
+        result = { size: size, pairs: best.pairs };
+        return;
+      }
 
       if (!candidate) {
         var target = currentTarget();
@@ -564,7 +711,9 @@ window.Arukone = window.Arukone || {};
         var segments = cutPathForced(size, opt.path);
         var longEnough = segments.every(function (s) { return s.length >= 3; });
         if (segments.length < 2 || !longEnough) return;
+        segments = mutatePartition(size, segments, MUTATE_MOVES);
         candidate = segmentsToPairs(segments);
+        candidateSegments = segments;
         huntIndex = 0;
         exact = null;
         return;
@@ -576,7 +725,7 @@ window.Arukone = window.Arukone || {};
         if (verdict === 'shortcut') {
           candidate = null;
         } else if (verdict === 'clean') {
-          result = { size: size, pairs: candidate };
+          acceptClean();
         } else {
           huntIndex++;
         }
@@ -590,7 +739,7 @@ window.Arukone = window.Arukone || {};
       exact.step();
       if (exact.done()) {
         if (exact.verdict() === 'clean') {
-          result = { size: size, pairs: candidate };
+          acceptClean();
         } else {
           candidate = null;
         }
@@ -632,6 +781,9 @@ window.Arukone = window.Arukone || {};
     verifyOnlyFullSolutions: verifyOnlyFullSolutions,
     hasShortcutSolution: hasShortcutSolution,
     cutPathForced: cutPathForced,
-    optimizePath: optimizePath
+    optimizePath: optimizePath,
+    mutatePartition: mutatePartition,
+    shapeStats: shapeStats,
+    difficultyScore: difficultyScore
   };
 })();
