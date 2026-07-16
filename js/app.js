@@ -10,6 +10,7 @@
   var newGameBtn = document.getElementById('new-game-btn');
   var resetBtn = document.getElementById('reset-btn');
   var winBanner = document.getElementById('win-banner');
+  var fillBanner = document.getElementById('fill-banner');
   var generatingHint = document.getElementById('generating-hint');
 
   var stateHolder = { grid: null };
@@ -22,10 +23,20 @@
 
   function showWin() {
     winBanner.hidden = false;
+    fillBanner.hidden = true;
   }
 
   function hideWin() {
     winBanner.hidden = true;
+  }
+
+  // Weist darauf hin, dass zwar alle Paare verbunden sind, aber noch Felder
+  // frei sind — sonst wirkt der fehlende "Gelöst!"-Zustand wie ein Fehler.
+  function updateFillHint() {
+    var grid = stateHolder.grid;
+    fillBanner.hidden = !grid ||
+      Arukone.GridModel.isSolved(grid) ||
+      !Arukone.GridModel.allPairsConnected(grid);
   }
 
   function setControlsEnabled(enabled) {
@@ -36,6 +47,7 @@
 
   function startNewGame(size) {
     hideWin();
+    fillBanner.hidden = true;
     setControlsEnabled(false);
     generatingHint.hidden = false;
 
@@ -63,11 +75,15 @@
   resetBtn.addEventListener('click', function () {
     Arukone.GridModel.resetAllPaths(stateHolder.grid);
     hideWin();
+    fillBanner.hidden = true;
     redraw();
   });
 
   Arukone.InputController.attach(container, stateHolder, {
-    onUpdate: redraw,
+    onUpdate: function () {
+      redraw();
+      updateFillHint();
+    },
     onWin: showWin
   });
 

@@ -197,20 +197,18 @@ window.Arukone = window.Arukone || {};
     }
   }
 
+  function allPairsConnected(grid) {
+    for (var i = 0; i < grid.pairs.length; i++) {
+      if (!isPairComplete(grid, grid.pairs[i].id)) return false;
+    }
+    return true;
+  }
+
   function isSolved(grid) {
     for (var i = 0; i < grid.cellOwner.length; i++) {
       if (grid.cellOwner[i] === null) return false;
     }
-    for (var j = 0; j < grid.pairs.length; j++) {
-      var pair = grid.pairs[j];
-      if (pair.path.length < 2) return false;
-      var first = pair.path[0];
-      var last = pair.path[pair.path.length - 1];
-      var forward = equalsCell(first, pair.endpointA) && equalsCell(last, pair.endpointB);
-      var backward = equalsCell(first, pair.endpointB) && equalsCell(last, pair.endpointA);
-      if (!forward && !backward) return false;
-    }
-    return true;
+    return allPairsConnected(grid);
   }
 
   window.Arukone.GridModel = {
@@ -227,6 +225,7 @@ window.Arukone = window.Arukone || {};
     isPairComplete: isPairComplete,
     clearPairPath: clearPairPath,
     resetAllPaths: resetAllPaths,
+    allPairsConnected: allPairsConnected,
     isSolved: isSolved
   };
 })();

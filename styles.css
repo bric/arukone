@@ -159,6 +159,19 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
+.fill-banner {
+  margin-top: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: #d97a1e;
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  max-width: min(92vw, 560px);
+}
+
 .generating-hint[hidden] {
   display: none;
 }

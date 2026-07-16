@@ -169,7 +169,10 @@ window.Arukone = window.Arukone || {};
   // Prüft, ob es eine Verbindung aller Paare gibt, die NICHT alle Felder füllt.
   // Rückgabe: 'clean' (jede Lösung füllt das Gitter), 'shortcut' (Abkürzung
   // gefunden) oder 'unknown' (Suchbudget überschritten).
-  function verifyOnlyFullSolutions(size, pairs, budget) {
+  // `mode` steuert die Explorationsreihenfolge: 'greedy' probiert zielnahe
+  // Wege zuerst (findet direkte Abkürzungen), 'anti' zielferne zuerst (findet
+  // Abkürzungen mit weit ausholenden Wegen, z. B. um den Rand herum).
+  function verifyOnlyFullSolutions(size, pairs, budget, mode) {
     var total = size * size;
     var adj = [];
     var rowOf = [];
@@ -256,10 +259,10 @@ window.Arukone = window.Arukone || {};
         return;
       }
 
-      // Kürzere Wege zuerst probieren, damit Abkürzungen früh gefunden werden
+      var sign = mode === 'anti' ? -1 : 1;
       var ns = adj[head].slice().sort(function (x, y) {
-        return (Math.abs(rowOf[x] - rowOf[target]) + Math.abs(colOf[x] - colOf[target])) -
-          (Math.abs(rowOf[y] - rowOf[target]) + Math.abs(colOf[y] - colOf[target]));
+        return sign * ((Math.abs(rowOf[x] - rowOf[target]) + Math.abs(colOf[x] - colOf[target])) -
+          (Math.abs(rowOf[y] - rowOf[target]) + Math.abs(colOf[y] - colOf[target])));
       });
 
       for (var i = 0; i < ns.length; i++) {
@@ -309,11 +312,12 @@ window.Arukone = window.Arukone || {};
   // nicht mehr bezahlbar (der Suchraum explodiert). Stattdessen jagen mehrere
   // randomisierte Suchläufe gezielt nach Abkürzungen: Wird eine gefunden, ist
   // der Kandidat verworfen; überlebt er alle Läufe (oder wird die Suche sogar
-  // erschöpft), gilt er als gut.
-  var HUNTS = 4;
-  var HUNT_BUDGET = 3000000;
+  // erschöpft), gilt er als gut. Greedy- und Anti-Läufe wechseln sich ab, da
+  // sie unterschiedliche Abkürzungsformen aufspüren.
+  var HUNT_PLAN = ['greedy', 'anti', 'greedy', 'anti', 'greedy', 'anti'];
+  var HUNT_BUDGET = 2500000;
   var OPTIMIZE_SLICE_MS = 200;
-  var ESCALATE_AFTER_MS = 15000;
+  var ESCALATE_AFTER_MS = 30000;
 
   // Resumierbare Suche: step() arbeitet ein Zeitscheibchen ab und gibt danach
   // die Kontrolle zurück, damit der Browser zwischendurch rendern kann.
@@ -345,10 +349,11 @@ window.Arukone = window.Arukone || {};
         return;
       }
 
-      var verdict = verifyOnlyFullSolutions(size, shuffle(candidate.slice()), HUNT_BUDGET);
+      var verdict = verifyOnlyFullSolutions(
+        size, shuffle(candidate.slice()), HUNT_BUDGET, HUNT_PLAN[huntIndex]);
       if (verdict === 'shortcut') {
         candidate = null;
-      } else if (verdict === 'clean' || ++huntIndex >= HUNTS) {
+      } else if (verdict === 'clean' || ++huntIndex >= HUNT_PLAN.length) {
         result = { size: size, pairs: candidate };
       }
     }
