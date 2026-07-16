@@ -10,6 +10,7 @@
   var newGameBtn = document.getElementById('new-game-btn');
   var resetBtn = document.getElementById('reset-btn');
   var winBanner = document.getElementById('win-banner');
+  var generatingHint = document.getElementById('generating-hint');
 
   var stateHolder = { grid: null };
   var cellElements = [];
@@ -26,12 +27,30 @@
     winBanner.hidden = true;
   }
 
+  function setControlsEnabled(enabled) {
+    sizeSelect.disabled = !enabled;
+    newGameBtn.disabled = !enabled;
+    resetBtn.disabled = !enabled;
+  }
+
   function startNewGame(size) {
-    var puzzle = Arukone.PuzzleGenerator.generate(size);
-    stateHolder.grid = Arukone.GridModel.createGrid(puzzle.size, puzzle.pairs);
-    cellElements = Arukone.Renderer.buildBoard(container, size);
     hideWin();
-    redraw();
+    setControlsEnabled(false);
+    generatingHint.hidden = false;
+
+    // Yield to the browser so it can paint the "generating" hint before the
+    // (possibly slow) synchronous puzzle generation blocks the main thread.
+    window.setTimeout(function () {
+      try {
+        var puzzle = Arukone.PuzzleGenerator.generate(size);
+        stateHolder.grid = Arukone.GridModel.createGrid(puzzle.size, puzzle.pairs);
+        cellElements = Arukone.Renderer.buildBoard(container, size);
+        redraw();
+      } finally {
+        generatingHint.hidden = true;
+        setControlsEnabled(true);
+      }
+    }, 20);
   }
 
   sizeSelect.addEventListener('change', function () {

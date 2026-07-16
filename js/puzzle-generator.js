@@ -113,9 +113,8 @@ window.Arukone = window.Arukone || {};
   }
 
   function defaultPairCount(size) {
-    var totalCells = size * size;
-    var k = Math.round(totalCells / 9);
-    return Math.max(3, Math.min(k, 14));
+    var k = Math.round(size * 0.6);
+    return Math.max(3, k);
   }
 
   function generate(size, pairCount) {
