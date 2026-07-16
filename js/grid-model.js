@@ -106,13 +106,50 @@ window.Arukone = window.Arukone || {};
     return ownedPair.id;
   }
 
+  function shortestFreeRoute(grid, start, goal) {
+    var size = grid.size;
+    var startIdx = flatIndex(size, start.row, start.col);
+    var goalIdx = flatIndex(size, goal.row, goal.col);
+    var prev = new Array(size * size).fill(-1);
+    var visited = new Array(size * size).fill(false);
+    visited[startIdx] = true;
+
+    var queue = [start];
+    var deltas = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+
+    while (queue.length > 0) {
+      var cur = queue.shift();
+      var curIdx = flatIndex(size, cur.row, cur.col);
+      if (curIdx === goalIdx) {
+        var route = [];
+        var idx = goalIdx;
+        while (idx !== startIdx) {
+          route.unshift({ row: Math.floor(idx / size), col: idx % size });
+          idx = prev[idx];
+        }
+        return route;
+      }
+      for (var d = 0; d < deltas.length; d++) {
+        var nr = cur.row + deltas[d][0];
+        var nc = cur.col + deltas[d][1];
+        if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
+        var ni = flatIndex(size, nr, nc);
+        if (visited[ni]) continue;
+        if (ni !== goalIdx && grid.cellOwner[ni] !== null) continue;
+        visited[ni] = true;
+        prev[ni] = curIdx;
+        queue.push({ row: nr, col: nc });
+      }
+    }
+    return null;
+  }
+
   function continueDrag(grid, pairId, row, col) {
     var pair = getPairById(grid, pairId);
     if (pair.path.length === 0) return false;
 
     var last = pair.path[pair.path.length - 1];
     if (last.row === row && last.col === col) return false;
-    if (!isAdjacent(last, { row: row, col: col })) return false;
 
     var idx = indexOfInPath(pair, row, col);
     if (idx !== -1) {
@@ -123,11 +160,31 @@ window.Arukone = window.Arukone || {};
     var owner = getOwner(grid, row, col);
     if (owner !== null && owner !== pairId) return false;
 
-    pair.path.push({ row: row, col: col });
-    if (owner === null) {
-      setOwner(grid, row, col, pairId);
+    var route;
+    if (isAdjacent(last, { row: row, col: col })) {
+      route = [{ row: row, col: col }];
+    } else {
+      route = shortestFreeRoute(grid, last, { row: row, col: col });
+      if (!route) return false;
+    }
+
+    for (var i = 0; i < route.length; i++) {
+      var step = route[i];
+      pair.path.push(step);
+      if (getOwner(grid, step.row, step.col) === null) {
+        setOwner(grid, step.row, step.col, pairId);
+      }
     }
     return true;
+  }
+
+  function isPairComplete(grid, pairId) {
+    var pair = getPairById(grid, pairId);
+    if (pair.path.length < 2) return false;
+    var first = pair.path[0];
+    var last = pair.path[pair.path.length - 1];
+    return (equalsCell(first, pair.endpointA) && equalsCell(last, pair.endpointB)) ||
+      (equalsCell(first, pair.endpointB) && equalsCell(last, pair.endpointA));
   }
 
   function clearPairPath(grid, pairId) {
@@ -167,6 +224,7 @@ window.Arukone = window.Arukone || {};
     indexOfInPath: indexOfInPath,
     beginDrag: beginDrag,
     continueDrag: continueDrag,
+    isPairComplete: isPairComplete,
     clearPairPath: clearPairPath,
     resetAllPaths: resetAllPaths,
     isSolved: isSolved

@@ -38,8 +38,13 @@ window.Arukone = window.Arukone || {};
 
     function handlePointerUp() {
       if (!dragState.active) return;
+      var pairId = dragState.pairId;
       dragState.active = false;
       dragState.pairId = null;
+
+      if (!GridModel.isPairComplete(stateHolder.grid, pairId)) {
+        GridModel.clearPairPath(stateHolder.grid, pairId);
+      }
 
       callbacks.onUpdate();
       if (GridModel.isSolved(stateHolder.grid)) callbacks.onWin();
