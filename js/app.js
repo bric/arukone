@@ -10,18 +10,53 @@
   var newGameBtn = document.getElementById('new-game-btn');
   var resetBtn = document.getElementById('reset-btn');
   var winBanner = document.getElementById('win-banner');
+  var winTime = document.getElementById('win-time');
   var fillBanner = document.getElementById('fill-banner');
   var generatingHint = document.getElementById('generating-hint');
+  var timerDisplay = document.getElementById('timer');
 
   var stateHolder = { grid: null };
   var cellElements = [];
   var generationToken = 0;
+  var timerStart = null;
+  var timerInterval = null;
+
+  function formatTime(ms) {
+    var totalSec = Math.floor(ms / 1000);
+    var h = Math.floor(totalSec / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+    var mmss = m + ':' + (s < 10 ? '0' : '') + s;
+    return h > 0 ? h + ':' + (m < 10 ? '0' : '') + mmss : mmss;
+  }
+
+  function startTimer() {
+    stopTimer();
+    timerStart = Date.now();
+    timerDisplay.textContent = '0:00';
+    timerInterval = window.setInterval(function () {
+      timerDisplay.textContent = formatTime(Date.now() - timerStart);
+    }, 1000);
+  }
+
+  function stopTimer() {
+    if (timerInterval !== null) {
+      window.clearInterval(timerInterval);
+      timerInterval = null;
+    }
+  }
 
   function redraw() {
     Arukone.Renderer.render(cellElements, stateHolder.grid);
   }
 
   function showWin() {
+    stopTimer();
+    if (timerStart !== null) {
+      var elapsed = formatTime(Date.now() - timerStart);
+      timerDisplay.textContent = elapsed;
+      winTime.textContent = ' – Zeit: ' + elapsed;
+    }
     winBanner.hidden = false;
     fillBanner.hidden = true;
   }
@@ -50,6 +85,9 @@
     fillBanner.hidden = true;
     setControlsEnabled(false);
     generatingHint.hidden = false;
+    stopTimer();
+    timerStart = null;
+    timerDisplay.textContent = '0:00';
 
     var token = ++generationToken;
     Arukone.PuzzleGenerator.generateAsync(size, function (puzzle) {
@@ -59,6 +97,7 @@
       redraw();
       generatingHint.hidden = true;
       setControlsEnabled(true);
+      startTimer();
     });
   }
 
@@ -77,6 +116,9 @@
     hideWin();
     fillBanner.hidden = true;
     redraw();
+    // Nach einem gelösten Rätsel zählt Zurücksetzen als neuer Versuch;
+    // mitten im Spiel läuft die Uhr einfach weiter.
+    if (timerInterval === null && stateHolder.grid) startTimer();
   });
 
   Arukone.InputController.attach(container, stateHolder, {

@@ -20,6 +20,7 @@
   </select>
   <button id="new-game-btn" type="button">Neues Spiel</button>
   <button id="reset-btn" type="button">Zurücksetzen</button>
+  <span id="timer" class="timer">0:00</span>
 </header>
 
 <main class="board-area">
@@ -28,7 +29,7 @@
     <span class="spinner"></span>
     Rätsel wird berechnet …
   </div>
-  <div id="win-banner" class="win-banner" hidden>Gelöst!</div>
+  <div id="win-banner" class="win-banner" hidden>Gelöst!<span id="win-time"></span></div>
   <div id="fill-banner" class="fill-banner" hidden>Alle Paare verbunden – aber alle Felder müssen genutzt werden!</div>
 </main>
 
