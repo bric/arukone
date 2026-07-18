@@ -157,6 +157,14 @@ window.Arukone = window.Arukone || {};
       return true;
     }
 
+    // Eine fertige Verbindung nicht über den Endpunkt hinaus verlängern —
+    // sonst gilt sie beim Loslassen als unvollständig und wird gelöscht,
+    // wenn der Zeiger etwas zu weit gezogen wurde.
+    if (pair.path.length >= 2 &&
+      (equalsCell(last, pair.endpointA) || equalsCell(last, pair.endpointB))) {
+      return false;
+    }
+
     var owner = getOwner(grid, row, col);
     if (owner !== null && owner !== pairId) return false;
 
