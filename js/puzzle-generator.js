@@ -135,12 +135,30 @@ window.Arukone = window.Arukone || {};
     return result;
   }
 
+  // Gewicht, mit dem Endpunkte am Rand bestraft werden. Hoch genug, damit die
+  // Suche sie klar gegenüber Wandkanten und Knicken meidet, aber weich: Wenn
+  // ein Rätsel ohne Rand-Endpunkte nicht erreichbar ist, gewinnt trotzdem der
+  // beste Kandidat, statt dass die Erzeugung scheitert.
+  var EDGE_END_WEIGHT = 25;
+
+  function isBorderCell(size, c) {
+    return c.row === 0 || c.row === size - 1 || c.col === 0 || c.col === size - 1;
+  }
+
+  function isCornerCell(size, c) {
+    return (c.row === 0 || c.row === size - 1) && (c.col === 0 || c.col === size - 1);
+  }
+
   // Kennzahlen der Lösungsform. Bei Voll-Lösungen sind immer alle Randzellen
   // belegt — entscheidend ist, ob Segmente LÄNGS der Wand laufen (lange
   // Wandkanten = Zwiebelringe, sofort erkennbar) oder sie nur kreuzen, und
   // wie oft sie abknicken (verwinkelt = schwer zu lesen).
+  // edgeEnds zählt Endpunkte am Rand: Eine Randzelle hat nur 3 Nachbarn (in
+  // der Ecke 2), der Pfadanfang ist dort also stark vorgezeichnet. Endpunkte
+  // im Feldinneren lassen dem Spieler mehr Möglichkeiten offen.
   function shapeStats(size, segments) {
     var turns = 0, wallEdges = 0, cells = 0, minLen = Infinity;
+    var edgeEnds = 0, cornerEnds = 0;
     function onWall(a, b) {
       return (a.row === 0 && b.row === 0) || (a.row === size - 1 && b.row === size - 1) ||
         (a.col === 0 && b.col === 0) || (a.col === size - 1 && b.col === size - 1);
@@ -149,6 +167,11 @@ window.Arukone = window.Arukone || {};
       var seg = segments[s];
       if (seg.length < minLen) minLen = seg.length;
       cells += seg.length;
+      var ends = [seg[0], seg[seg.length - 1]];
+      for (var e = 0; e < ends.length; e++) {
+        if (isBorderCell(size, ends[e])) edgeEnds++;
+        if (isCornerCell(size, ends[e])) cornerEnds++;
+      }
       for (var i = 1; i < seg.length; i++) {
         if (onWall(seg[i - 1], seg[i])) wallEdges++;
         if (i < seg.length - 1) {
@@ -158,19 +181,23 @@ window.Arukone = window.Arukone || {};
         }
       }
     }
-    return { turns: turns, wallEdges: wallEdges, cells: cells, minLen: minLen };
+    return {
+      turns: turns, wallEdges: wallEdges, cells: cells, minLen: minLen,
+      edgeEnds: edgeEnds, cornerEnds: cornerEnds
+    };
   }
 
   function shapeCost(size, segments) {
     var st = shapeStats(size, segments);
-    var cost = 3 * st.wallEdges - 2 * st.turns;
+    var cost = 3 * st.wallEdges - 2 * st.turns +
+      EDGE_END_WEIGHT * st.edgeEnds + EDGE_END_WEIGHT * st.cornerEnds;
     if (st.minLen < 3) cost += 100000; // triviale Paare vermeiden
     return cost;
   }
 
   function difficultyScore(size, segments) {
     var st = shapeStats(size, segments);
-    return (st.turns - st.wallEdges) / st.cells;
+    return (st.turns - st.wallEdges - 6 * st.edgeEnds - 6 * st.cornerEnds) / st.cells;
   }
 
   // Zufällige Hamiltonpfade sind kleinteilig gewunden und zerfallen in viele
@@ -216,7 +243,12 @@ window.Arukone = window.Arukone || {};
   // Segmentzahl), können die Lösung aber aus der Ringform herauswandern
   // lassen. Simulated-Annealing-artig: Form-Verbesserungen immer, kleine
   // Rückschritte selten annehmen.
-  function mutatePartition(size, segments, moves) {
+  // `edgeAllowance` gibt an, wie viele Endpunkte am Rand geduldet werden.
+  // Je strenger (0), desto schwerer sind die Rätsel — aber desto seltener
+  // bestehen sie die Abkürzungsprüfung, weil sich Paare, die alle im Inneren
+  // enden, meist auch komplett innen verbinden lassen (Randring bliebe leer).
+  function mutatePartition(size, segments, moves, edgeAllowance) {
+    var allowance = edgeAllowance || 0;
     var paths = segments.map(function (p) {
       return p.map(function (c) { return { row: c.row, col: c.col }; });
     });
@@ -231,32 +263,64 @@ window.Arukone = window.Arukone || {};
 
     function shapeJ() {
       var st = shapeStats(size, paths);
-      return 2 * st.turns - 3 * st.wallEdges;
+      var over = Math.max(0, st.edgeEnds - allowance);
+      return 2 * st.turns - 3 * st.wallEdges -
+        EDGE_END_WEIGHT * over - EDGE_END_WEIGHT * st.cornerEnds;
     }
 
-    // Endzelle x von Pfad A an ein straff andockendes Ende von Pfad B geben
-    function tryMove() {
-      var ai = Math.floor(Math.random() * paths.length);
-      var A = paths[ai];
-      if (A.length <= 3) return null;
-      var fromHead = Math.random() < 0.5;
-      var x = fromHead ? A[0] : A[A.length - 1];
-      var ns = neighborsOf(size, x.row, x.col);
-      var options = [];
-      for (var i = 0; i < ns.length; i++) {
-        var bi = owner[flat(size, ns[i])];
-        if (bi === -1 || bi === ai) continue;
-        var B = paths[bi];
-        if (eq(B[0], ns[i])) options.push({ bi: bi, head: true });
-        if (eq(B[B.length - 1], ns[i])) options.push({ bi: bi, head: false });
+    // Alle legalen Endzellen-Transfers aufzählen: Endzelle x von Pfad A geht
+    // an das benachbarte Ende y von Pfad B. Dabei hört y auf, Endpunkt zu
+    // sein, und A rückt seinen Endpunkt eine Zelle nach innen — genau so
+    // wandern Endpunkte über das Brett.
+    function legalMoves() {
+      var result = [];
+      for (var ai = 0; ai < paths.length; ai++) {
+        var A = paths[ai];
+        if (A.length <= 3) continue; // Mindestlänge halten
+        for (var h = 0; h < 2; h++) {
+          var fromHead = h === 0;
+          var x = fromHead ? A[0] : A[A.length - 1];
+          var ns = neighborsOf(size, x.row, x.col);
+          for (var i = 0; i < ns.length; i++) {
+            var bi = owner[flat(size, ns[i])];
+            if (bi === -1 || bi === ai) continue;
+            var B = paths[bi];
+            var toHead;
+            if (eq(B[0], ns[i])) toHead = true;
+            else if (eq(B[B.length - 1], ns[i])) toHead = false;
+            else continue;
+            // Straffheit: x darf in B außer an y nichts berühren
+            var taut = true;
+            for (var n = 0; n < ns.length; n++) {
+              if (owner[flat(size, ns[n])] === bi && !eq(ns[n], ns[i])) {
+                taut = false;
+                break;
+              }
+            }
+            if (!taut) continue;
+            result.push({ ai: ai, fromHead: fromHead, x: x, bi: bi, toHead: toHead, y: ns[i] });
+          }
+        }
       }
-      if (options.length === 0) return null;
-      var o = options[Math.floor(Math.random() * options.length)];
-      var yEnd = o.head ? paths[o.bi][0] : paths[o.bi][paths[o.bi].length - 1];
-      for (var n = 0; n < ns.length; n++) {
-        if (owner[flat(size, ns[n])] === o.bi && !eq(ns[n], yEnd)) return null;
+      return result;
+    }
+
+    // Blind gewürfelte Züge treffen selten den einen, der einen Rand-Endpunkt
+    // auflöst. Darum bevorzugt solche Züge vorschlagen — angenommen werden sie
+    // weiterhin nur, wenn die Zielfunktion zustimmt.
+    function proposeMove() {
+      var all = legalMoves();
+      if (all.length === 0) return null;
+      if (Math.random() < 0.85) {
+        var targeted = [];
+        for (var i = 0; i < all.length; i++) {
+          if (isBorderCell(size, all[i].y)) targeted.push(all[i]);
+        }
+        if (targeted.length > 0) {
+          return targeted[Math.floor(Math.random() * targeted.length)];
+        }
       }
-      return { ai: ai, fromHead: fromHead, x: x, bi: o.bi, toHead: o.head };
+      return all[Math.floor(Math.random() * all.length)];
     }
 
     function apply(t) {
@@ -273,8 +337,8 @@ window.Arukone = window.Arukone || {};
 
     var J = shapeJ();
     for (var m = 0; m < moves; m++) {
-      var t = tryMove();
-      if (!t) continue;
+      var t = proposeMove();
+      if (!t) break; // keine legalen Züge mehr
       apply(t);
       var J2 = shapeJ();
       if (J2 >= J || Math.random() < 0.03) {
@@ -656,11 +720,28 @@ window.Arukone = window.Arukone || {};
   var HUNT_PLAN = ['greedy', 'anti'];
   var HUNT_BUDGET = 1500000;
   var OPTIMIZE_SLICE_MS = 200;
-  var ESCALATE_AFTER_MS = 45000;
-  var STATE_CAP = 400000;
+  var ESCALATE_AFTER_MS = 90000;
+  var ESCALATE_EDGE_MS = 6000;
+  // Niedrig gehalten: Ein hoher Deckel lässt die DP an einzelnen Kandidaten
+  // sekundenlang rechnen. Lieber früh als 'toocomplex' verwerfen und dafür
+  // viel mehr Kandidaten prüfen — gemessen vervierfacht das den Durchsatz.
+  var STATE_CAP = 150000;
   var MUTATE_MOVES = 5000;
-  var BESTOF_COUNT = 3;
-  var BESTOF_EXTRA_MS = 8000;
+  var BESTOF_EXTRA_MS = 10000;
+  var BESTOF_MIN_CANDIDATES = 6;
+  var BESTOF_STAGNATION_MS = 3000;
+
+  // Endpunkte am Rand sind das stärkste Schwierigkeits-Leck: Eine Randzelle
+  // hat nur 3 Nachbarn, eine Ecke 2 — der Anfang liegt dort auf der Hand.
+  // Ganz ohne Rand-Endpunkte geht es allerdings nicht: Wenn kein Pfad am Rand
+  // endet, lassen sich die Paare praktisch immer im Inneren verbinden und der
+  // Randring bleibt frei — solche Rätsel sind also abkürzbar und fallen durch
+  // die Prüfung. Darum wird nicht auf 0 gezielt, sondern auf ein erreichbares
+  // Minimum: Sobald ein bewiesen sauberer Kandidat das Ziel erreicht, gewinnt
+  // er sofort; sonst gewinnt nach Ablauf des Fensters der beste Fund.
+  function edgeEndGoal(pairCount) {
+    return Math.max(1, Math.round(pairCount / 3));
+  }
 
   // Resumierbare Suche: step() arbeitet ein Häppchen ab und gibt die
   // Kontrolle zurück, damit der Browser zwischendurch rendern kann.
@@ -677,31 +758,69 @@ window.Arukone = window.Arukone || {};
     var best = null;
     var cleanCount = 0;
     var firstCleanAt = 0;
+    var lastImproveAt = 0;
+    var frozenTarget = null;
+    var frozenAllowance = null;
     var result = null;
 
+    // Die Paarzahl wird nur gelockert, solange noch gar kein brauchbares
+    // Rätsel gefunden ist. Sobald eines vorliegt, bleibt sie eingefroren —
+    // die Zeit im Auswahlfenster darf das Rätsel nicht leichter machen.
     function currentTarget() {
+      if (frozenTarget !== null) return frozenTarget;
       var escalation = Math.floor((Date.now() - startTime) / ESCALATE_AFTER_MS);
       return baseTarget + escalation;
     }
 
+    // Solange nichts Sauberes gefunden ist, wird das Randziel schrittweise
+    // gelockert. Lieber ein Endpunkt am Rand als endloses Warten — und
+    // lieber das, als die Paarzahl zu erhöhen (darum lockert diese Schraube
+    // deutlich früher als die Paarzahl).
+    function currentAllowance() {
+      if (frozenAllowance !== null) return frozenAllowance;
+      var steps = Math.floor((Date.now() - startTime) / ESCALATE_EDGE_MS);
+      // Höchstens die Hälfte der Endpunkte darf am Rand landen; darüber
+      // hinaus zu lockern würde nichts mehr beschleunigen.
+      return Math.min(steps, currentTarget());
+    }
+
+    // Rangfolge unter bewiesen sauberen Kandidaten: zuerst möglichst wenige
+    // Endpunkte am Rand (Ecken zählen doppelt), erst danach die Verwinkelung.
     function acceptClean() {
-      var score = difficultyScore(size, candidateSegments);
-      if (!best || score > best.score) {
-        best = { pairs: candidate, score: score };
+      var st = shapeStats(size, candidateSegments);
+      var found = {
+        pairs: candidate,
+        edgePenalty: st.edgeEnds + st.cornerEnds,
+        score: difficultyScore(size, candidateSegments)
+      };
+      if (!best || found.edgePenalty < best.edgePenalty ||
+        (found.edgePenalty === best.edgePenalty && found.score > best.score)) {
+        best = found;
+        lastImproveAt = Date.now();
       }
       cleanCount++;
-      if (!firstCleanAt) firstCleanAt = Date.now();
+      if (!firstCleanAt) {
+        firstCleanAt = Date.now();
+        frozenTarget = found.pairs.length;
+        frozenAllowance = currentAllowance();
+      }
       candidate = null;
     }
 
     function step() {
       if (result) return;
 
-      // Best-of-Fenster: genug Kandidaten oder genug Zusatzzeit -> fertig
-      if (best && (cleanCount >= BESTOF_COUNT ||
-        Date.now() - firstCleanAt >= BESTOF_EXTRA_MS)) {
-        result = { size: size, pairs: best.pairs };
-        return;
+      // Fertig, sobald das Ziel erreicht ist. Sonst weitersuchen, bis das
+      // Fenster abläuft oder sich nichts mehr verbessert (kleine Bretter
+      // erreichen das Ziel nie — dort ist im Inneren schlicht zu wenig Platz).
+      if (best) {
+        var stagnant = cleanCount >= BESTOF_MIN_CANDIDATES &&
+          Date.now() - lastImproveAt >= BESTOF_STAGNATION_MS;
+        if (best.edgePenalty <= edgeEndGoal(best.pairs.length) || stagnant ||
+          Date.now() - firstCleanAt >= BESTOF_EXTRA_MS) {
+          result = { size: size, pairs: best.pairs };
+          return;
+        }
       }
 
       if (!candidate) {
@@ -711,7 +830,7 @@ window.Arukone = window.Arukone || {};
         var segments = cutPathForced(size, opt.path);
         var longEnough = segments.every(function (s) { return s.length >= 3; });
         if (segments.length < 2 || !longEnough) return;
-        segments = mutatePartition(size, segments, MUTATE_MOVES);
+        segments = mutatePartition(size, segments, MUTATE_MOVES, currentAllowance());
         candidate = segmentsToPairs(segments);
         candidateSegments = segments;
         huntIndex = 0;
@@ -760,10 +879,18 @@ window.Arukone = window.Arukone || {};
     return search.result();
   }
 
+  // Pro Timer-Tick so viele Schritte wie in dieses Zeitbudget passen. Ein
+  // Schritt je Tick wäre verschwenderisch: setTimeout kostet einige
+  // Millisekunden, und ein Kandidat besteht aus hunderten kurzen Schritten.
+  var TICK_BUDGET_MS = 40;
+
   function generateAsync(size, onDone) {
     var search = createSearch(size);
     function tick() {
-      search.step();
+      var deadline = Date.now() + TICK_BUDGET_MS;
+      do {
+        search.step();
+      } while (!search.done() && Date.now() < deadline);
       if (search.done()) {
         onDone(search.result());
       } else {
