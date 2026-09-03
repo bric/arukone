@@ -18,7 +18,7 @@ Gezogen wird per Maus oder Finger: An einem Endpunkt starten, über die
 Felder zum Partner-Endpunkt ziehen. Zurückziehen kürzt die Linie,
 Loslassen vor dem Ziel verwirft sie. Ein Timer misst die Lösungszeit.
 
-Feldgrößen: 5×5 bis 10×10 (die zuletzt gewählte Größe wird gespeichert).
+Feldgrößen: 5×5 bis 9×9 (die zuletzt gewählte Größe wird gespeichert).
 
 ## Rätselqualität
 
@@ -29,11 +29,15 @@ Jedes Rätsel wird lokal im Browser erzeugt und erfüllt garantiert:
   Felder frei lässt. Das wird nicht heuristisch geprüft, sondern exakt
   bewiesen (Frontier-Methode: dynamische Programmierung über die
   Gitterfront mit Mate-Kodierung der Pfadfragmente).
-- **Wenige Paare** — z. B. nur 6 Paare auf 10×10. Ein Backbite-
+- **Wenige Paare** — z. B. nur 5 Paare auf 9×9. Ein Backbite-
   Hügelsteigen formt dafür einen Hamiltonpfad in wenige straffe
   Segmente um; anschließende Mutationen auf Partitionsebene machen die
   Lösung verwinkelter, und aus mehreren bewiesenen Kandidaten gewinnt
   der mit dem höchsten Schwierigkeits-Score.
+- **Endpunkte möglichst im Inneren** — am Rand hat eine Zelle nur drei
+  Nachbarn, in der Ecke zwei; dort verraten die Endpunkte den Anfang.
+  Ganz ohne Rand-Endpunkte geht es allerdings nicht, sonst ließen sich
+  alle Paare im Inneren verbinden und der Randring bliebe frei.
 
 Die Erzeugung großer Felder kann darum einige Sekunden dauern — ein
 Hinweis mit Spinner zeigt an, dass noch gerechnet wird.
