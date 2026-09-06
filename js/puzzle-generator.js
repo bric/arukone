@@ -200,6 +200,65 @@ window.Arukone = window.Arukone || {};
     return (st.turns - st.wallEdges - 6 * st.edgeEnds - 6 * st.cornerEnds) / st.cells;
   }
 
+  // Wie viel muss man probieren, bis die Lösung dasteht? Ein DFS-Löser zählt
+  // seine Schritte bis zur ersten (und einzigen) Lösung. Wenige Schritte
+  // heißt: Die Lösung ergibt sich fast von selbst — genau solche Rätsel
+  // wirken auf kleinen Brettern trivial. Das Budget deckelt den Aufwand;
+  // wer es ausschöpft, gilt als hinreichend schwer.
+  function searchEffort(size, pairs, budget) {
+    var total = size * size;
+    var owner = new Uint8Array(total);
+    var adj = [];
+    for (var i = 0; i < total; i++) {
+      var r = Math.floor(i / size), c = i % size, out = [];
+      if (r > 0) out.push(i - size);
+      if (r < size - 1) out.push(i + size);
+      if (c > 0) out.push(i - 1);
+      if (c < size - 1) out.push(i + 1);
+      adj.push(out);
+    }
+    var ends = pairs.map(function (p) {
+      return { a: flat(size, p.endpointA), b: flat(size, p.endpointB) };
+    });
+    for (var e = 0; e < ends.length; e++) {
+      owner[ends[e].a] = 1;
+      owner[ends[e].b] = 1;
+    }
+    var used = ends.length * 2;
+    var nodes = 0;
+    var solved = false;
+
+    function routePair(idx) {
+      if (solved || nodes > budget) return;
+      if (idx === ends.length) {
+        if (used === total) solved = true;
+        return;
+      }
+      extend(idx, ends[idx].a, ends[idx].b);
+    }
+
+    function extend(idx, head, target) {
+      if (solved || ++nodes > budget) return;
+      var ns = adj[head];
+      for (var i = 0; i < ns.length; i++) {
+        var v = ns[i];
+        if (v === target) {
+          routePair(idx + 1);
+        } else if (!owner[v]) {
+          owner[v] = 1;
+          used++;
+          extend(idx, v, target);
+          owner[v] = 0;
+          used--;
+        }
+        if (solved) return;
+      }
+    }
+
+    routePair(0);
+    return nodes;
+  }
+
   // Zufällige Hamiltonpfade sind kleinteilig gewunden und zerfallen in viele
   // straffe Segmente. Ein Hügelsteigen über Backbite-Züge formt den Pfad in
   // große Strukturen um, bis er in höchstens `target` Segmente zerfällt.
@@ -729,19 +788,17 @@ window.Arukone = window.Arukone || {};
   var MUTATE_MOVES = 5000;
   var BESTOF_EXTRA_MS = 10000;
   var BESTOF_MIN_CANDIDATES = 6;
+  var BESTOF_MAX_CANDIDATES = 60;
+  // Deckel für die Aufwandsmessung: Wer ihn ausschöpft, ist schwer genug.
+  var EFFORT_BUDGET = 200000;
   var BESTOF_STAGNATION_MS = 3000;
 
-  // Endpunkte am Rand sind das stärkste Schwierigkeits-Leck: Eine Randzelle
-  // hat nur 3 Nachbarn, eine Ecke 2 — der Anfang liegt dort auf der Hand.
-  // Ganz ohne Rand-Endpunkte geht es allerdings nicht: Wenn kein Pfad am Rand
-  // endet, lassen sich die Paare praktisch immer im Inneren verbinden und der
-  // Randring bleibt frei — solche Rätsel sind also abkürzbar und fallen durch
-  // die Prüfung. Darum wird nicht auf 0 gezielt, sondern auf ein erreichbares
-  // Minimum: Sobald ein bewiesen sauberer Kandidat das Ziel erreicht, gewinnt
-  // er sofort; sonst gewinnt nach Ablauf des Fensters der beste Fund.
-  function edgeEndGoal(pairCount) {
-    return Math.max(1, Math.round(pairCount / 3));
-  }
+  // Endpunkte am Rand sind ein Schwierigkeits-Leck: Eine Randzelle hat nur
+  // 3 Nachbarn, eine Ecke 2 — der Anfang liegt dort auf der Hand. Ganz ohne
+  // geht es allerdings nicht: Wenn kein Pfad am Rand endet, lassen sich die
+  // Paare praktisch immer im Inneren verbinden und der Randring bliebe frei —
+  // solche Rätsel sind abkürzbar und fallen durch die Prüfung. Darum ist es
+  // kein Ausschlusskriterium, sondern das erste Rangmerkmal der Auswahl.
 
   // Resumierbare Suche: step() arbeitet ein Häppchen ab und gibt die
   // Kontrolle zurück, damit der Browser zwischendurch rendern kann.
@@ -785,16 +842,23 @@ window.Arukone = window.Arukone || {};
     }
 
     // Rangfolge unter bewiesen sauberen Kandidaten: zuerst möglichst wenige
-    // Endpunkte am Rand (Ecken zählen doppelt), erst danach die Verwinkelung.
+    // Endpunkte am Rand (Ecken zählen doppelt), dann der Suchaufwand — wie
+    // viel man also probieren muss, bis die Lösung dasteht —, zuletzt die
+    // Verwinkelung der Lösung.
     function acceptClean() {
       var st = shapeStats(size, candidateSegments);
       var found = {
         pairs: candidate,
         edgePenalty: st.edgeEnds + st.cornerEnds,
+        effort: searchEffort(size, candidate, EFFORT_BUDGET),
         score: difficultyScore(size, candidateSegments)
       };
-      if (!best || found.edgePenalty < best.edgePenalty ||
-        (found.edgePenalty === best.edgePenalty && found.score > best.score)) {
+      var better = !best || found.edgePenalty < best.edgePenalty;
+      if (!better && found.edgePenalty === best.edgePenalty) {
+        better = found.effort > best.effort ||
+          (found.effort === best.effort && found.score > best.score);
+      }
+      if (better) {
         best = found;
         lastImproveAt = Date.now();
       }
@@ -810,13 +874,14 @@ window.Arukone = window.Arukone || {};
     function step() {
       if (result) return;
 
-      // Fertig, sobald das Ziel erreicht ist. Sonst weitersuchen, bis das
-      // Fenster abläuft oder sich nichts mehr verbessert (kleine Bretter
-      // erreichen das Ziel nie — dort ist im Inneren schlicht zu wenig Platz).
+      // Weitersuchen, bis genug Kandidaten verglichen sind, das Fenster
+      // abläuft oder sich nichts mehr verbessert. Auf kleinen Brettern sind
+      // Kandidaten so billig, dass sich das Durchmustern vieler lohnt — dort
+      // entscheidet die Auswahl über die Schwierigkeit.
       if (best) {
         var stagnant = cleanCount >= BESTOF_MIN_CANDIDATES &&
           Date.now() - lastImproveAt >= BESTOF_STAGNATION_MS;
-        if (best.edgePenalty <= edgeEndGoal(best.pairs.length) || stagnant ||
+        if (cleanCount >= BESTOF_MAX_CANDIDATES || stagnant ||
           Date.now() - firstCleanAt >= BESTOF_EXTRA_MS) {
           result = { size: size, pairs: best.pairs };
           return;
