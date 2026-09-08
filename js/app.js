@@ -2,7 +2,7 @@
   'use strict';
 
   var Arukone = window.Arukone;
-  var ALLOWED_SIZES = [5, 6, 7, 8, 9];
+  var ALLOWED_SIZES = [6, 7, 8, 9];
   var DEFAULT_SIZE = 7;
 
   var container = document.getElementById('grid');

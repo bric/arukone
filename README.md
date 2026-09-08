@@ -18,7 +18,7 @@ Gezogen wird per Maus oder Finger: An einem Endpunkt starten, über die
 Felder zum Partner-Endpunkt ziehen. Zurückziehen kürzt die Linie,
 Loslassen vor dem Ziel verwirft sie. Ein Timer misst die Lösungszeit.
 
-Feldgrößen: 5×5 bis 9×9 (die zuletzt gewählte Größe wird gespeichert).
+Feldgrößen: 6×6 bis 9×9 (die zuletzt gewählte Größe wird gespeichert).
 
 ## Rätselqualität
 
